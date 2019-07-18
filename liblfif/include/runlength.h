@@ -38,28 +38,12 @@ public:
   void huffmanEncodeToStream(const HuffmanEncoder &encoder, OBitstream &stream, size_t class_bits) const;
 
   /**
-   * @brief Method which encodes the pair to stream by CABAC encoder.
-   * @param encoder The CABAC encoder.
-   * @param models Context model for each bit of the encoded value.
-   * @param class_bits Minimum number of bits needed to contain the maximum possible amplitude size.
-   */
-  void CABACEncodeToStream(CABACEncoder &encoder, CABAC::ContextModel models[8+8+14], size_t class_bits) const;
-
-  /**
    * @brief Method which decodes the pair from stream by Huffman decoder.
    * @param decoder The Huffman decoder.
    * @param stream The stream from which the symbol shall be decoded.
    * @param class_bits Minimum number of bits needed to contain the maximum possible amplitude size.
    */
   void huffmanDecodeFromStream(const HuffmanDecoder &decoder, IBitstream &stream, size_t class_bits);
-
-  /**
-   * @brief Method which decodes the pair from stream by CABAC decoder.
-   * @param decoder The CABAC decoder.
-   * @param models Context model for each bit of the decoded value.
-   * @param class_bits Minimum number of bits needed to contain the maximum possible amplitude size.
-   */
-  void CABACDecodeFromStream(CABACDecoder &decoder, CABAC::ContextModel models[8+8+14], size_t class_bits);
 
   /**
    * @brief Method which adds pair to the weight map.

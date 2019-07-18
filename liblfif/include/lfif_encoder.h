@@ -17,27 +17,66 @@
 #include <ostream>
 #include <sstream>
 
+template<size_t D>
+struct LfifEncoderParams {
+  enum QuantTableType {
+    DEFAULT = UNIFORM,
+    DCTDIAG,
+    DCTCOPY,
+    FILLDIAG,
+    FILLCOPY,
+    UNIFORM,
+    CUSTOM
+  };
+
+  enum TraversalTableType {
+    DEFAULT = ZIGZAG,
+    REFERENCE,
+    ZIGZAG,
+    QTABLE,
+    RADIUS,
+    DIAGONALS,
+    HYPERBOLOID,
+    CUSTOM
+  };
+
+  uint64_t img_dims[D+1] {}; /**< @brief Dimensions of a decoded image + image count. The multiple of all values should be equal to number of pixels in encoded image.*/
+  uint8_t  color_depth   {};   /**< @brief Number of bits per sample used by each decoded channel.*/
+  bool     use_huffman   {};   /**< @brief Huffman encoding will be used when this is true.*/
+  uint8_t  block_size    {};
+
+  uint8_t         num_quant_tables  {};
+  QuantTableType *quant_table_types {};
+  double         *qualities         {};
+
+  uint8_t             num_traversal_tables  {};
+  TraversalTableType *traversal_table_types {};
+
+  uint8_t num_entropy_encoder_ctxs {};
+
+  uint8_t  num_channels         {};
+  uint8_t *quant_table_idxs     {};
+  uint8_t *traversal_table_idxs {};
+  uint8_t *entropy_encoder_idxs {};
+}
+
 /**
 * @brief Base structure for encoding an image.
 */
-template<size_t BS, size_t D>
-struct LfifEncoder {
-  uint8_t color_depth;    /**< @brief Number of bits per sample used by each decoded channel.*/
-  uint64_t img_dims[D+1]; /**< @brief Dimensions of a decoded image + image count. The multiple of all values should be equal to number of pixels in encoded image.*/
+template<size_t D>
+class LfifEncoder {
+public:
+  inline LfifEncoder(const LfifEncoderParams &params);
 
-  bool use_huffman; /**< @brief Huffman encoding will be used when this is true.*/
+  const LfifEncoderParams &params;
 
-  QuantTable<BS, D>      quant_table     [2];    /**< @brief Quantization matrices for luma and chroma.*/
-  TraversalTable<BS, D>  traversal_table [2];    /**< @brief Traversal matrices for luma and chroma.*/
-  ReferenceBlock<BS, D>  reference_block [2];    /**< @brief Reference blocks for luma and chroma to be used for traversal optimization.*/
-  HuffmanWeights         huffman_weight  [2][2]; /**< @brief Weigth maps for luma and chroma and also for the DC and AC coefficients to be used for optimal Huffman encoding.*/
-  HuffmanEncoder         huffman_encoder [2][2]; /**< @brief Huffman encoders for luma and chroma and also for the DC and AC coefficients.*/
+  DCT<D>             dct;
+  QuantTable<D>      *quant_table;     /**< @brief Quantization matrices for luma and chroma.*/
+  TraversalTable<D>  *traversal_table; /**< @brief Traversal matrices for luma and chroma.*/
 
-  QuantTable<BS, D>     *quant_tables    [3]; /**< @brief Pointer to quantization matrix used by each channel.*/
-  ReferenceBlock<BS, D> *reference_blocks[3]; /**< @brief Pointer to reference block used by each channel.*/
-  TraversalTable<BS, D> *traversal_tables[3]; /**< @brief Pointer to traversal matrix used by each channel.*/
-  HuffmanWeights        *huffman_weights [3]; /**< @brief Pointer to weight maps used by each channel.*/
-  HuffmanEncoder        *huffman_encoders[3]; /**< @brief Pointer to Huffman encoders used by each channel.*/
+  ReferenceBlock<D>  *reference_block;    /**< @brief Reference blocks for luma and chroma to be used for traversal optimization.*/
+  HuffmanWeights     *huffman_weight [2]; /**< @brief Weigth maps for luma and chroma and also for the DC and AC coefficients to be used for optimal Huffman encoding.*/
+  HuffmanEncoder     *huffman_encoder[2]; /**< @brief Huffman encoders for luma and chroma and also for the DC and AC coefficients.*/
 
   size_t blocks_cnt; /**< @brief Number of blocks in the encoded image.*/
   size_t pixels_cnt; /**< @brief Number of pixels in the encoded image.*/
@@ -47,92 +86,145 @@ struct LfifEncoder {
   size_t class_bits;  /**< @brief Number of bits sufficient to contain number of bits of maximum DCT coefficient.*/
   size_t max_zeroes;  /**< @brief Maximum length of zero coefficient run-length.*/
 
-  Block<INPUTTRIPLET,  BS, D> current_block;   /**< @brief Buffer for caching the block of pixels before encoding.*/
-  Block<INPUTUNIT,     BS, D> input_block;     /**< @brief Buffer for caching the block of input samples.*/
-  Block<DCTDATAUNIT,   BS, D> dct_block;       /**< @brief Buffer for caching the block of DCT coefficients.*/
-  Block<QDATAUNIT,     BS, D> quantized_block; /**< @brief Buffer for caching the block of quantized coefficients.*/
-  Block<RunLengthPair, BS, D> runlength;       /**< @brief Buffer for caching the block of run-length pairs.*/
+  /**
+  * @brief Function which initializes quantization matrices.
+  * @param table_type Type of the tables to be initialized.
+  * @param quality Encoding quality from 1 to 100.
+  * @return Nonzero if requested unknown table type.
+  */
+  inline int constructQuantizationTables(const std::string &table_type, float quality)
+
+  /**
+  * @brief Function which performs arbitrary scan of an image. This function prepares a block into the encoding structure buffers.
+  * @param input Callback function specified by client with signature T input(size_t index), where T is pixel/sample type.
+  * @param func Callback function which performs action on every block with signature void func(size_t channel), where channel is channel from which the extracted block is.
+  */
+  template<typename IF, typename F>
+  inline void performScan(IF &&input, F &&func);
+
+  /**
+  * @brief Function which performs scan for linearization optimization.
+  * @param input Callback function specified by client with signature T input(size_t index), where T is pixel/sample type.
+  */
+  template<typename F>
+  void referenceScan(F &&input);
+
+  /**
+  * @brief Function which initializes linearization matrices.
+  * @param table_type Type of the tables to be initialized.
+  * @return Nonzero if requested unknown table type.
+  */
+  int constructTraversalTables(const std::string &table_type);
+
+  /**
+  * @brief Function which performs scan for huffman weights.
+  * @param input Callback function specified by client with signature T input(size_t index), where T is pixel/sample type.
+  */
+  template<typename F>
+  void huffmanScan(F &&input);
+
+  /**
+  * @brief Function which initializes Huffman encoder from weights.
+  */
+  void constructHuffmanTables();
+
+  /**
+  * @brief Function which writes tables to stream.
+  * @param output Stream to which data will be written.
+  */
+  void writeHeader(std::ostream &output);
+
+  /**
+  * @brief Function which encodes the image to the stream.
+  * @param input Callback function specified by client with signature T input(size_t index), where T is pixel/sample type.
+  * @param output Output stream to which the image shall be encoded.
+  */
+  template<typename F>
+  void outputScanHuffman(F &&input, std::ostream &output);
+
+  /**
+  * @brief Function which encodes the image to the stream with CABAC.
+  * @param input Callback function specified by client with signature T input(size_t index), where T is pixel/sample type.
+  * @param output Output stream to which the image shall be encoded.
+  */
+  template<typename F>
+  void outputScanCABAC(F &&input, std::ostream &output)
 };
 
-/**
-* @brief Function which (re)initializes the encoder structure.
-* @param enc The encoder structure.
-*/
-template<size_t BS, size_t D>
-void initEncoder(LfifEncoder<BS, D> &enc) {
-  enc.quant_tables[0]     = &enc.quant_table[0];
-  enc.quant_tables[1]     = &enc.quant_table[1];
-  enc.quant_tables[2]     = &enc.quant_table[1];
+template<size_t D>
+LfifEncoder::LfifEncoder(const LfifEncoderParams &params): params { params }, dct(params.block_size) {
+  quant_table = new QuantTable[params.num_quant_tables];
+  traversal_table = new TraversalTable[params.num_traversal_tables];
+}
 
-  enc.reference_blocks[0] = &enc.reference_block[0];
-  enc.reference_blocks[1] = &enc.reference_block[1];
-  enc.reference_blocks[2] = &enc.reference_block[1];
+template<size_t D>
+void LfifEncoder<D>::initEncoder() {
+  quant_tables[0]     = &quant_table[0];
+  quant_tables[1]     = &quant_table[1];
+  quant_tables[2]     = &quant_table[1];
 
-  enc.traversal_tables[0] = &enc.traversal_table[0];
-  enc.traversal_tables[1] = &enc.traversal_table[1];
-  enc.traversal_tables[2] = &enc.traversal_table[1];
+  reference_blocks[0] = &reference_block[0];
+  reference_blocks[1] = &reference_block[1];
+  reference_blocks[2] = &reference_block[1];
 
-  enc.huffman_weights[0]  =  enc.huffman_weight[0];
-  enc.huffman_weights[1]  =  enc.huffman_weight[1];
-  enc.huffman_weights[2]  =  enc.huffman_weight[1];
+  traversal_tables[0] = &traversal_table[0];
+  traversal_tables[1] = &traversal_table[1];
+  traversal_tables[2] = &traversal_table[1];
 
-  enc.huffman_encoders[0] =  enc.huffman_encoder[0];
-  enc.huffman_encoders[1] =  enc.huffman_encoder[1];
-  enc.huffman_encoders[2] =  enc.huffman_encoder[1];
+  huffman_weights[0]  =  huffman_weight[0];
+  huffman_weights[1]  =  huffman_weight[1];
+  huffman_weights[2]  =  huffman_weight[1];
 
-  enc.blocks_cnt = 1;
-  enc.pixels_cnt = 1;
+  huffman_encoders[0] =  huffman_encoder[0];
+  huffman_encoders[1] =  huffman_encoder[1];
+  huffman_encoders[2] =  huffman_encoder[1];
+
+  blocks_cnt = 1;
+  pixels_cnt = 1;
 
   for (size_t i = 0; i < D; i++) {
-    enc.blocks_cnt *= ceil(enc.img_dims[i] / static_cast<double>(BS));
-    enc.pixels_cnt *= enc.img_dims[i];
+    blocks_cnt *= ceil(img_dims[i] / static_cast<double>(block_size));
+    pixels_cnt *= img_dims[i];
   }
 
-  enc.amp_bits = ceil(log2(constpow(BS, D))) + enc.color_depth - D - (D/2);
-  enc.class_bits = RunLengthPair::classBits(enc.amp_bits);
-  enc.zeroes_bits = RunLengthPair::zeroesBits(enc.class_bits);
-  enc.max_zeroes = constpow(2, enc.zeroes_bits) - 1;
+  amp_bits = ceil(log2(pow(block_size, D))) + color_depth - D - (D/2);
+  class_bits = RunLengthPair::classBits(amp_bits);
+  zeroes_bits = RunLengthPair::zeroesBits(class_bits);
+  max_zeroes = pow(2, zeroes_bits) - 1;
 
   for (size_t y = 0; y < 2; y++) {
-    enc.reference_block[y].fill(0);
+    reference_block[y].fill(0);
     for (size_t x = 0; x < 2; x++) {
-      enc.huffman_weight[y][x].clear();
+      huffman_weight[y][x].clear();
     }
   }
 }
 
-/**
-* @brief Function which initializes quantization matrices.
-* @param enc The encoder structure.
-* @param table_type Type of the tables to be initialized.
-* @param quality Encoding quality from 1 to 100.
-* @return Nonzero if requested unknown table type.
-*/
-template<size_t BS, size_t D>
-int constructQuantizationTables(LfifEncoder<BS, D> &enc, const std::string &table_type, float quality) {
+template<size_t D>
+int LfifEncoder<D>::constructQuantizationTables(QuantTableType table_type, float quality) {
   auto scale_table = [&](const auto &table) {
-    if (table_type == "DCTDIAG")  return scaleByDCT<8, 2, BS>(table);
-    if (table_type == "DCTCOPY")  return scaleByDCT<8, 2, BS>(table);
-    if (table_type == "FILLDIAG") return scaleFillNear<8, 2, BS>(table);
-    if (table_type == "FILLCOPY") return scaleFillNear<8, 2, BS>(table);
-    return QuantTable<BS, 2>();
+    if (table_type == DCTDIAG)  return    scaleByDCT<2>(table, block_size);
+    if (table_type == DCTCOPY)  return    scaleByDCT<2>(table, block_size);
+    if (table_type == FILLDIAG) return scaleFillNear<2>(table, block_size);
+    if (table_type == FILLCOPY) return scaleFillNear<2>(table, block_size);
+    return QuantTable<2>();
   };
 
   auto extend_table = [&](const auto &table) {
-    if (table_type == "DCTDIAG")  return averageDiagonalTable<BS, 2, D>(table);
-    if (table_type == "DCTCOPY")  return copyTable<BS, 2, D>(table);
-    if (table_type == "FILLDIAG") return averageDiagonalTable<BS, 2, D>(table);
-    if (table_type == "FILLCOPY") return copyTable<BS, 2, D>(table);
-    return QuantTable<BS, D>();
+    if (table_type == DCTDIAG)  return averageDiagonalTable<2, D>(table, block_size);
+    if (table_type == DCTCOPY)  return            copyTable<2, D>(table, block_size);
+    if (table_type == FILLDIAG) return averageDiagonalTable<2, D>(table, block_size);
+    if (table_type == FILLCOPY) return            copyTable<2, D>(table, block_size);
+    return QuantTable<D>();
   };
 
-  if (table_type == "DCTDIAG" || table_type == "FILLDIAG" || table_type == "DCTCOPY" || table_type == "FILLCOPY") {
-    enc.quant_table[0] = extend_table(scale_table(base_luma));
-    enc.quant_table[1] = extend_table(scale_table(base_chroma));
+  if (table_type == DCTDIAG || table_type == FILLDIAG || table_type == DCTCOPY || table_type == FILLCOPY) {
+    quant_table[0] = extend_table(scale_table(base_luma));
+    quant_table[1] = extend_table(scale_table(base_chroma));
   }
-  else if (table_type == "DEFAULT" || table_type == "UNIFORM") {
+  else if (table_type == DEFAULT || table_type == UNIFORM) {
     for (size_t i = 0; i < 2; i++) {
-      enc.quant_table[i] = uniformTable<BS, D>(50);
+      quant_table[i] = uniformTable<D>(50);
     }
   }
   else {
@@ -140,101 +232,92 @@ int constructQuantizationTables(LfifEncoder<BS, D> &enc, const std::string &tabl
   }
 
   for (size_t i = 0; i < 2; i++) {
-    enc.quant_table[i] = clampTable<BS, D>(applyQuality<BS, D>(enc.quant_table[i], quality), 1, 255);
+    quant_table[i] = clampTable<D>(applyQuality<D>(quant_table[i], quality), 1, 255);
   }
 
   return 0;
 }
 
-/**
-* @brief Function which performs arbitrary scan of an image. This function prepares a block into the encoding structure buffers.
-* @param enc The encoder structure.
-* @param input Callback function specified by client with signature T input(size_t index), where T is pixel/sample type.
-* @param func Callback function which performs action on every block with signature void func(size_t channel), where channel is channel from which the extracted block is.
-*/
-template<size_t BS, size_t D, typename INPUTF, typename PERFF>
-void performScan(LfifEncoder<BS, D> &enc, INPUTF &&input, PERFF &&func) {
+template<size_t D>
+template<typename IF, typename F>
+void LfifEncoder<D>::performScan(IF &&input, F &&func) {
+  Block<INPUTTRIPLET, D> current_block(m_block_size);
+  Block<INPUTUNIT,    D>   input_block(m_block_size);
+
   auto outputF = [&](size_t index, const auto &value) {
-    enc.current_block[index] = value;
+    current_block[index] = value;
   };
 
-  for (size_t img = 0; img < enc.img_dims[D]; img++) {
+  for (size_t img = 0; img < img_dims[D]; img++) {
     auto inputF = [&](size_t index) {
-      return input(img * enc.pixels_cnt + index);
+      return input(img * pixels_cnt + index);
     };
 
-    for (size_t block = 0; block < enc.blocks_cnt; block++) {
-      getBlock<BS, D>(inputF, block, enc.img_dims, outputF);
-
+    for (size_t block = 0; block < blocks_cnt; block++) {
+      getBlock<D>(inputF, block, img_dims, outputF);
 
       for (size_t channel = 0; channel < 3; channel++) {
-        for (size_t i = 0; i < constpow(BS, D); i++) {
-          enc.input_block[i] = enc.current_block[i][channel];
+
+        for (size_t i = 0; i < pow(m_block_size, D); i++) {
+          input_block[i] = current_block[i][channel];
         }
 
-        func(channel);
+        func(input_block, channel);
       }
     }
   }
 }
 
-/**
-* @brief Function which performs scan for linearization optimization.
-* @param enc The encoder structure.
-* @param input Callback function specified by client with signature T input(size_t index), where T is pixel/sample type.
-*/
-template<size_t BS, size_t D, typename F>
-void referenceScan(LfifEncoder<BS, D> &enc, F &&input) {
-  auto perform = [&](size_t channel) {
-    forwardDiscreteCosineTransform<BS, D>(enc.input_block,      enc.dct_block);
-                          quantize<BS, D>(enc.dct_block,        enc.quantized_block, *enc.quant_tables[channel]);
-               addToReferenceBlock<BS, D>(enc.quantized_block, *enc.reference_blocks[channel]);
+template <size_t D>
+template<typename F>
+void LfifEncoder<D>::referenceScan(F &&input) {
+  Block<DCTDATAUNIT, D>       dct_block(m_block_size);
+  Block<QDATAUNIT,   D> quantized_block(m_block_size);
+
+  auto perform = [&](Block<INPUTUNIT, D> &input_block, size_t channel) {
+    forwardDiscreteCosineTransform<D>(input_block,      dct_block);
+                          quantize<D>(dct_block,        quantized_block, *quant_tables[channel]);
+               addToReferenceBlock<D>(quantized_block, *reference_blocks[channel]);
   };
 
-  performScan(enc, input, perform);
+  performScan(input, perform);
 }
 
-/**
-* @brief Function which initializes linearization matrices.
-* @param enc The encoder structure.
-* @param table_type Type of the tables to be initialized.
-* @return Nonzero if requested unknown table type.
-*/
-template<size_t BS, size_t D>
-int constructTraversalTables(LfifEncoder<BS, D> &enc, const std::string &table_type) {
-  if (table_type == "REFERENCE") {
+template<size_t D>
+int LfifEncoder<D>::constructTraversalTables(TraversalTableType table_type) {
+  if (table_type == REFERENCE) {
     for (size_t i = 0; i < 2; i++) {
-      enc.traversal_table[i]
-      .constructByReference(enc.reference_block[i]);
+      traversal_table[i]
+      .constructByReference(reference_block[i]);
     }
   }
-  else if (table_type == "DEFAULT" || table_type == "ZIGZAG") {
+  else if (table_type == DEFAULT || table_type == ZIGZAG) {
     for (size_t i = 0; i < 2; i++) {
-      enc.traversal_table[i]
+      traversal_table[i]
       .constructZigzag();
     }
   }
-  else if (table_type == "QTABLE") {
+  else if (table_type == QTABLE) {
     for (size_t i = 0; i < 2; i++) {
-      enc.traversal_table[i]
-      .constructByQuantTable(enc.quant_table[i]);
+      traversal_table[i]
+      .constructByQuantTable(quant_table[i]);
     }
   }
-  else if (table_type == "RADIUS") {
+  else if (table_type == RADIUS) {
     for (size_t i = 0; i < 2; i++) {
-      enc.traversal_table[i]
+      traversal_table[i]
       .constructByRadius();
     }
   }
-  else if (table_type == "DIAGONALS") {
+  else if (table_type == DIAGONALS) {
     for (size_t i = 0; i < 2; i++) {
-      enc.traversal_table[i]
+      traversal_table[i]
       .constructByDiagonals();
     }
   }
-  else if (table_type == "HYPERBOLOID") {
+  else if (table_type == HYPERBOLOID) {
     for (size_t i = 0; i < 2; i++) {
-      enc.traversal_table[i]
+      traversal_table[i]
       .constructByHyperboloid();
     }
   }
@@ -245,98 +328,88 @@ int constructTraversalTables(LfifEncoder<BS, D> &enc, const std::string &table_t
   return 0;
 }
 
-/**
-* @brief Function which performs scan for huffman weights.
-* @param enc The encoder structure.
-* @param input Callback function specified by client with signature T input(size_t index), where T is pixel/sample type.
-*/
-template<size_t BS, size_t D, typename F>
-void huffmanScan(LfifEncoder<BS, D> &enc, F &&input) {
+template<size_t D>
+template<typename F>
+void LfifEncoder<D>::huffmanScan(F &&input) {
+  Block<DCTDATAUNIT,   D>       dct_block(m_block_size);
+  Block<QDATAUNIT,     D> quantized_block(m_block_size);
+  Block<RunLengthPair, D>       runlength(m_block_size);
+
   QDATAUNIT previous_DC [3] {};
 
-  auto perform = [&](size_t channel) {
-    forwardDiscreteCosineTransform<BS, D>(enc.input_block,      enc.dct_block);
-                          quantize<BS, D>(enc.dct_block,        enc.quantized_block,         *enc.quant_tables[channel]);
-                      diffEncodeDC<BS, D>(enc.quantized_block,  previous_DC[channel]);
-                          traverse<BS, D>(enc.quantized_block, *enc.traversal_tables[channel]);
-                   runLengthEncode<BS, D>(enc.quantized_block,  enc.runlength,                enc.max_zeroes);
-                 huffmanAddWeights<BS, D>(enc.runlength,        enc.huffman_weights[channel], enc.class_bits);
+  auto perform = [&](Block<INPUTUNIT, D> &input_block, size_t channel) {
+    forwardDiscreteCosineTransform<D>(input_block,      dct_block);
+                          quantize<D>(dct_block,        quantized_block,         *quant_tables[channel]);
+                      diffEncodeDC<D>(quantized_block,  previous_DC[channel]);
+                          traverse<D>(quantized_block, *traversal_tables[channel]);
+                   runLengthEncode<D>(quantized_block,  runlength,                max_zeroes);
+                 huffmanAddWeights<D>(runlength,        huffman_weights[channel], class_bits);
   };
 
   performScan(enc, input, perform);
 }
 
-/**
-* @brief Function which initializes Huffman encoder from weights.
-* @param enc The encoder structure.
-*/
-template<size_t BS, size_t D>
-void constructHuffmanTables(LfifEncoder<BS, D> &enc) {
+template<size_t D>
+void LfifEncoder<D>::constructHuffmanTables() {
   for (size_t y = 0; y < 2; y++) {
     for (size_t x = 0; x < 2; x++) {
-      enc.huffman_encoder[y][x]
-      . generateFromWeights(enc.huffman_weight[y][x]);
+      huffman_encoder[y][x]
+      . generateFromWeights(huffman_weight[y][x]);
     }
   }
 }
 
-/**
-* @brief Function which writes tables to stream.
-* @param enc The encoder structure.
-* @param output Stream to which data will be written.
-*/
-template<size_t BS, size_t D>
-void writeHeader(LfifEncoder<BS, D> &enc, std::ostream &output) {
+template<size_t D>
+void LfifEncoder<D>::writeHeader(std::ostream &output) {
   output << "LFIF-" << D << "D\n";
-  output << BS << "\n";
+  output << block_size << "\n";
 
-  writeValueToStream<uint8_t>(enc.color_depth, output);
+  writeValueToStream<uint8_t>(color_depth, output);
 
   for (size_t i = 0; i < D + 1; i++) {
-    writeValueToStream<uint64_t>(enc.img_dims[i], output);
+    writeValueToStream<uint64_t>(img_dims[i], output);
   }
 
   for (size_t i = 0; i < 2; i++) {
-    writeToStream<BS, D>(enc.quant_table[i], output);
+    writeToStream<D>(quant_table[i], output);
   }
 
   for (size_t i = 0; i < 2; i++) {
-    enc.traversal_table[i]
+    traversal_table[i]
     . writeToStream(output);
   }
 
-  writeValueToStream<uint8_t>(enc.use_huffman, output);
+  writeValueToStream<uint8_t>(use_huffman, output);
 
-  if (enc.use_huffman) {
+  if (use_huffman) {
     for (size_t y = 0; y < 2; y++) {
       for (size_t x = 0; x < 2; x++) {
-        enc.huffman_encoder[y][x]
+        huffman_encoder[y][x]
         . writeToStream(output);
       }
     }
   }
 }
 
-/**
-* @brief Function which encodes the image to the stream.
-* @param enc The encoder structure.
-* @param input Callback function specified by client with signature T input(size_t index), where T is pixel/sample type.
-* @param output Output stream to which the image shall be encoded.
-*/
-template<size_t BS, size_t D, typename F>
-void outputScanHuffman(LfifEncoder<BS, D> &enc, F &&input, std::ostream &output) {
+template<size_t D>
+template<typename F>
+void LfifEncoder<D>::outputScanHuffman(F &&input, std::ostream &output) {
+  Block<DCTDATAUNIT,   D>       dct_block(m_block_size);
+  Block<QDATAUNIT,     D> quantized_block(m_block_size);
+  Block<RunLengthPair, D>       runlength(m_block_size);
+
   QDATAUNIT previous_DC [3] {};
   OBitstream bitstream      {};
 
   bitstream.open(&output);
 
-  auto perform = [&](size_t channel) {
-    forwardDiscreteCosineTransform<BS, D>(enc.input_block,      enc.dct_block);
-                          quantize<BS, D>(enc.dct_block,        enc.quantized_block,          *enc.quant_tables[channel]);
-                      diffEncodeDC<BS, D>(enc.quantized_block,  previous_DC[channel]);
-                          traverse<BS, D>(enc.quantized_block, *enc.traversal_tables[channel]);
-                   runLengthEncode<BS, D>(enc.quantized_block,  enc.runlength,                 enc.max_zeroes);
-             encodeToStreamHuffman<BS, D>(enc.runlength,        enc.huffman_encoders[channel], bitstream, enc.class_bits);
+  auto perform = [&](Block<INPUTUNIT, D> &input_block, size_t channel) {
+    forwardDiscreteCosineTransform<D>(input_block,      dct_block);
+                          quantize<D>(dct_block,        quantized_block,          *quant_tables[channel]);
+                      diffEncodeDC<D>(quantized_block,  previous_DC[channel]);
+                          traverse<D>(quantized_block, *traversal_tables[channel]);
+                   runLengthEncode<D>(quantized_block,  runlength,                 max_zeroes);
+             encodeToStreamHuffman<D>(runlength,        huffman_encoders[channel], bitstream, class_bits);
   };
 
   performScan(enc, input, perform);
@@ -344,34 +417,32 @@ void outputScanHuffman(LfifEncoder<BS, D> &enc, F &&input, std::ostream &output)
   bitstream.flush();
 }
 
-/**
-* @brief Function which encodes the image to the stream with CABAC.
-* @param enc The encoder structure.
-* @param input Callback function specified by client with signature T input(size_t index), where T is pixel/sample type.
-* @param output Output stream to which the image shall be encoded.
-*/
-template<size_t BS, size_t D, typename F>
-void outputScanCABAC(LfifEncoder<BS, D> &enc, F &&input, std::ostream &output) {
+template<size_t D>
+template<typename F>
+void LfifEncoder<D>::outputScanCABAC(F &&input, std::ostream &output) {
+  Block<DCTDATAUNIT, D>       dct_block(m_block_size);
+  Block<QDATAUNIT,   D> quantized_block(m_block_size);
+  Block<RunLengthPair, D>     runlength(m_block_size);
+
   QDATAUNIT            previous_DC[3] {};
+  CABACContexts<D>     contexts   [3] {};
   OBitstream           bitstream      {};
   CABACEncoder         cabac          {};
-  CABACContexts<BS, D> contexts[3]    {};
 
   bitstream.open(&output);
   cabac.init(bitstream);
 
   auto perform = [&](size_t channel) {
-    forwardDiscreteCosineTransform<BS, D>(enc.input_block,      enc.dct_block);
-                          quantize<BS, D>(enc.dct_block,        enc.quantized_block,          *enc.quant_tables[channel]);
-                      diffEncodeDC<BS, D>(enc.quantized_block,  previous_DC[channel]);
-                          traverse<BS, D>(enc.quantized_block, *enc.traversal_tables[channel]);
-              encodeTraversedCABAC<BS, D>(enc.quantized_block,  cabac,                         contexts[channel]);
+    forwardDiscreteCosineTransform<D>(input_block,      dct_block);
+                          quantize<D>(dct_block,        quantized_block,          *quant_tables[channel]);
+                      diffEncodeDC<D>(quantized_block,  previous_DC[channel]);
+                          traverse<D>(quantized_block, *traversal_tables[channel]);
+              encodeTraversedCABAC<D>(quantized_block,  cabac,                         contexts[channel]);
   };
 
   performScan(enc, input, perform);
 
   cabac.terminate();
-  bitstream.flush();
 }
 
 #endif

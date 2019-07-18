@@ -29,9 +29,12 @@
  * @brief Function which performs the forward DCT to the block. Output coefficients are returned in second parameter.
  * @param input_block The block to be transformed.
  * @param transformed_block The transformed block.
+ * @param dct Initialized DCT engine.
  */
-template <size_t BS, size_t D>
-void forwardDiscreteCosineTransform(const Block<INPUTUNIT, BS, D> &input_block, Block<DCTDATAUNIT, BS, D> &transformed_block) {
+template <size_t D>
+void forwardDiscreteCosineTransform(const Block<INPUTUNIT, D> &input_block, Block<DCTDATAUNIT, D> &transformed_block, const DCT &dct) {
+  assert(input_block.size() == transformed_block.size() == dct.blockSize());
+
   transformed_block.fill(0);
 
   auto inputF = [&](size_t index) {
@@ -42,7 +45,7 @@ void forwardDiscreteCosineTransform(const Block<INPUTUNIT, BS, D> &input_block, 
     return transformed_block[index];
   };
 
-  fdct<BS, D>(inputF, outputF);
+  dct.fdct<D>(inputF, outputF);
 }
 
 /**
@@ -51,9 +54,11 @@ void forwardDiscreteCosineTransform(const Block<INPUTUNIT, BS, D> &input_block, 
  * @param quantized_block The quantized block.
  * @param quant_table The quantization matrix.
  */
-template <size_t BS, size_t D>
-void quantize(const Block<DCTDATAUNIT, BS, D> &transformed_block, Block<QDATAUNIT, BS, D> &quantized_block, const QuantTable<BS, D> &quant_table) {
-  for (size_t i = 0; i < constpow(BS, D); i++) {
+template <size_t D>
+void quantize(const Block<DCTDATAUNIT, D> &transformed_block, Block<QDATAUNIT, D> &quantized_block, const QuantTable<D> &quant_table) {
+  assert(transformed_block.size() == quantized_block.size() == quant_table.size());
+
+  for (size_t i = 0; i < pow(quant_table.size(), D); i++) {
     quantized_block[i] = std::round(transformed_block[i] / quant_table[i]);
   }
 }
@@ -63,9 +68,11 @@ void quantize(const Block<DCTDATAUNIT, BS, D> &transformed_block, Block<QDATAUNI
  * @param quantized_block The quantized block to be added.
  * @param reference The block to which values should be added.
  */
-template <size_t BS, size_t D>
-void addToReferenceBlock(const Block<QDATAUNIT, BS, D> &quantized_block, ReferenceBlock<BS, D> &reference) {
-  for (size_t i = 0; i < constpow(BS, D); i++) {
+template <size_t D>
+void addToReferenceBlock(const Block<QDATAUNIT, D> &quantized_block, ReferenceBlock<D> &reference) {
+  assert(quantized_block.size() == reference.size());
+
+  for (size_t i = 0; i < pow(reference.size(), D); i++) {
     reference[i] += abs(quantized_block[i]);
   }
 }
@@ -75,8 +82,8 @@ void addToReferenceBlock(const Block<QDATAUNIT, BS, D> &quantized_block, Referen
  * @param quantized_block The quantized block to be DPCM encoded.
  * @param previous_DC Value of a previous DC coefficient.
  */
-template <size_t BS, size_t D>
-void diffEncodeDC(Block<QDATAUNIT, BS, D> &quantized_block, QDATAUNIT &previous_DC) {
+template <size_t D>
+void diffEncodeDC(Block<QDATAUNIT, D> &quantized_block, QDATAUNIT &previous_DC) {
   QDATAUNIT current_DC = quantized_block[0];
   quantized_block[0] -= previous_DC;
   previous_DC = current_DC;
@@ -87,11 +94,13 @@ void diffEncodeDC(Block<QDATAUNIT, BS, D> &quantized_block, QDATAUNIT &previous_
  * @param diff_encoded_block The block to be traversed.
  * @param traversal_table The traversal matrix.
  */
-template <size_t BS, size_t D>
-void traverse(Block<QDATAUNIT, BS, D> &diff_encoded_block, const TraversalTable<BS, D> &traversal_table) {
-  Block<QDATAUNIT, BS, D> diff_encoded_copy(diff_encoded_block);
+template <size_t D>
+void traverse(Block<QDATAUNIT, D> &diff_encoded_block, const TraversalTable<D> &traversal_table) {
+  assert(diff_encoded_block.size() == traversal_table.size());
 
-  for (size_t i = 0; i < constpow(BS, D); i++) {
+  Block<QDATAUNIT, D> diff_encoded_copy(diff_encoded_block);
+
+  for (size_t i = 0; i < pow(traversal_table.size(), D); i++) {
     diff_encoded_block[traversal_table[i]] = diff_encoded_copy[i];
   }
 }
@@ -102,11 +111,14 @@ void traverse(Block<QDATAUNIT, BS, D> &diff_encoded_block, const TraversalTable<
  * @param encoder CABAC Encoder.
  * @param contexts Contexts for block encoding.
  */
-template <size_t BS, size_t D>
-void encodeTraversedCABAC(const Block<QDATAUNIT, BS, D> &traversed_block, CABACEncoder &encoder, CABACContexts<BS, D> &contexts) {
+template <size_t D>
+void encodeTraversedCABAC(const Block<QDATAUNIT, D> &traversed_block, CABACEncoder &encoder, CABACContexts<D> &contexts) {
+  assert(traversed_block.size() == contexts.size());
+
+  size_t block_size = traversed_block.size();
   size_t coef_cnt {};
 
-  for (size_t i = 0; i < constpow(BS, D); i++) {
+  for (size_t i = 0; i < pow(block_size, D); i++) {
     if (traversed_block[i]) {
       coef_cnt++;
     }
@@ -115,7 +127,7 @@ void encodeTraversedCABAC(const Block<QDATAUNIT, BS, D> &traversed_block, CABACE
   if (coef_cnt > 0) {
     encoder.encodeBit(contexts.coded_block_flag_ctx, 1);
 
-    for (size_t i = 0; i < constpow(BS, D) - 1; i++) {
+    for (size_t i = 0; i < pow(block_size, D) - 1; i++) {
       if (traversed_block[i] == 0) {
         encoder.encodeBit(contexts.significant_coef_flag_ctx[i], 0);
       }
@@ -136,8 +148,8 @@ void encodeTraversedCABAC(const Block<QDATAUNIT, BS, D> &traversed_block, CABACE
     size_t numT1   {0};
     size_t numLgt1 {0};
 
-    for (size_t i = 1; i <= constpow(BS, D); i++) {
-      size_t ii = constpow(BS, D) - i;
+    for (size_t i = 1; i <= pow(block_size, D); i++) {
+      size_t ii = pow(block_size, D) - i;
 
       QDATAUNIT coef = traversed_block[ii];
 
@@ -188,8 +200,12 @@ void encodeTraversedCABAC(const Block<QDATAUNIT, BS, D> &traversed_block, CABACE
  * @param runlength The output block of run-length pairs, ended by EOB if not full.
  * @param max_zeroes Maximum number of zeroes in run-length.
  */
-template <size_t BS, size_t D>
-void runLengthEncode(const Block<QDATAUNIT, BS, D> &traversed_block, Block<RunLengthPair, BS, D> &runlength, size_t max_zeroes) {
+template <size_t D>
+void runLengthEncode(const Block<QDATAUNIT, D> &traversed_block, Block<RunLengthPair, D> &runlength, size_t max_zeroes) {
+  assert(traversed_block.size() == runlength.size());
+
+  size_t block_size = traversed_block.size();
+
   auto pairs_it = std::begin(runlength);
 
   auto push_pair = [&](RunLengthPair &&pair) {
@@ -202,7 +218,7 @@ void runLengthEncode(const Block<QDATAUNIT, BS, D> &traversed_block, Block<RunLe
   push_pair({0, traversed_block[0]});
 
   size_t zeroes = 0;
-  for (size_t i = 1; i < constpow(BS, D); i++) {
+  for (size_t i = 1; i < pow(block_size, D); i++) {
     if (traversed_block[i] == 0) {
       zeroes++;
     }
@@ -225,8 +241,8 @@ void runLengthEncode(const Block<QDATAUNIT, BS, D> &traversed_block, Block<RunLe
  * @param weights Two maps for huffman weighting. First is for DC coefficient, second for AC coefficients.
  * @param class_bits Number of bits for the second part of codeword.
  */
-template <size_t BS, size_t D>
-void huffmanAddWeights(const Block<RunLengthPair, BS, D> &runlength, HuffmanWeights weights[2], size_t class_bits) {
+template <size_t D>
+void huffmanAddWeights(const Block<RunLengthPair, D> &runlength, HuffmanWeights weights[2], size_t class_bits) {
   auto pairs_it = std::begin(runlength);
 
   pairs_it->addToWeights(weights[0], class_bits);
@@ -244,8 +260,8 @@ void huffmanAddWeights(const Block<RunLengthPair, BS, D> &runlength, HuffmanWeig
  * @param stream The output bitstream.
  * @param class_bits Number of bits for the second part of codeword.
  */
-template <size_t BS, size_t D>
-void encodeToStreamHuffman(const Block<RunLengthPair, BS, D> &runlength, const HuffmanEncoder encoder[2], OBitstream &stream, size_t class_bits) {
+template <size_t D>
+void encodePairsToStreamHuffman(const Block<RunLengthPair, D> &runlength, const HuffmanEncoder encoder[2], OBitstream &stream, size_t class_bits) {
   auto pairs_it = std::begin(runlength);
 
   pairs_it->huffmanEncodeToStream(encoder[0], stream, class_bits);
@@ -253,25 +269,6 @@ void encodeToStreamHuffman(const Block<RunLengthPair, BS, D> &runlength, const H
   do {
     pairs_it++;
     pairs_it->huffmanEncodeToStream(encoder[1], stream, class_bits);
-  } while (!pairs_it->eob() && (pairs_it != (std::end(runlength) - 1)));
-}
-
-/**
- * @brief Function encodes pairs to stream by CABAC encoder.
- * @param runlength The input block of run-length pairs.
- * @param encoder CABAC Encoder.
- * @param models Contexts for every bit of run-length value, amplitude size and amplitude value.
- * @param class_bits Number of bits for the second part of codeword.
- */
-template <size_t BS, size_t D>
-void encodeToStreamCABAC(const Block<RunLengthPair, BS, D> &runlength, CABACEncoder &encoder, CABAC::ContextModel models[(8+8+14) * 2], size_t class_bits) {
-  auto pairs_it = std::begin(runlength);
-
-  pairs_it->CABACEncodeToStream(encoder, &models[0], class_bits);
-
-  do {
-    pairs_it++;
-    pairs_it->CABACEncodeToStream(encoder, &models[(8+8+14)], class_bits);
   } while (!pairs_it->eob() && (pairs_it != (std::end(runlength) - 1)));
 }
 

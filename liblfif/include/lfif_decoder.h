@@ -19,7 +19,7 @@
 /**
 * @brief Base structure for decoding an image.
 */
-template<size_t BS, size_t D>
+template<size_t D>
 struct LfifDecoder {
   uint8_t color_depth;    /**< @brief Number of bits per sample used by each decoded channel.*/
   uint64_t img_dims[D+1]; /**< @brief Dimensions of a decoded image + image count.*/
@@ -39,12 +39,6 @@ struct LfifDecoder {
 
   size_t amp_bits;   /**< @brief Number of bits sufficient to contain maximum DCT coefficient.*/
   size_t class_bits; /**< @brief Number of bits sufficient to contain number of bits of maximum DCT coefficient.*/
-
-  Block<INPUTTRIPLET,  BS, D> current_block;   /**< @brief Buffer for caching the block of pixels before returning to client.*/
-  Block<RunLengthPair, BS, D> runlength;       /**< @brief Buffer for caching the block of run-length pairs when decoding.*/
-  Block<QDATAUNIT,     BS, D> quantized_block; /**< @brief Buffer for caching the block of quantized coefficients.*/
-  Block<DCTDATAUNIT,   BS, D> dct_block;       /**< @brief Buffer for caching the block of DCT coefficients.*/
-  Block<INPUTUNIT,     BS, D> output_block;    /**< @brief Buffer for caching the block of samples.*/
 };
 
 /**

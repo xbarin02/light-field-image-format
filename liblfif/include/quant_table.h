@@ -22,13 +22,13 @@ using QTABLEUNIT = uint64_t; /**< @brief Unit which is intended to containt quan
 /**
  * @brief Quantization matrix type.
  */
-template <size_t BS, size_t D>
-using QuantTable = Block<QTABLEUNIT, BS, D>;
+template <size_t D>
+using QuantTable = Block<QTABLEUNIT, D>;
 
 /**
  * @brief Base luma matrix used in libjpeg implementation. Values corresponds to quality of 50.
  */
-static constexpr QuantTable<8, 2> base_luma = {
+static constexpr QuantTable<2> base_luma {
   16,  11,  10,  16,  24,  40,  51,  61,
   12,  12,  14,  19,  26,  58,  60,  55,
   14,  13,  16,  24,  40,  57,  69,  56,
@@ -42,7 +42,7 @@ static constexpr QuantTable<8, 2> base_luma = {
 /**
  * @brief Base chroma matrix used in libjpeg implementation. Values corresponds to quality of 50.
  */
-static constexpr QuantTable<8, 2> base_chroma = {
+static constexpr QuantTable<2> base_chroma {
   17, 18, 24, 47, 99, 99, 99, 99,
   18, 21, 26, 66, 99, 99, 99, 99,
   24, 26, 56, 99, 99, 99, 99, 99,
@@ -58,9 +58,9 @@ static constexpr QuantTable<8, 2> base_chroma = {
  * @param input The matrix to be scaled.
  * @return Scaled matrix.
  */
-template <size_t BSIN, size_t D, size_t BSOUT>
-constexpr QuantTable<BSOUT, D> scaleFillNear(const QuantTable<BSIN, D> &input) {
-  QuantTable<BSOUT, D> output {};
+template <size_t D>
+constexpr QuantTable<D> scaleFillNear(const QuantTable<D> &input, size_t output_size) {
+  QuantTable<D> output(output_size);
 
   auto inputF = [&](size_t index) {
     return input[index];
@@ -71,8 +71,8 @@ constexpr QuantTable<BSOUT, D> scaleFillNear(const QuantTable<BSIN, D> &input) {
   };
 
   size_t dims[D] {};
-  std::fill(dims, dims + D, BSIN);
-  getBlock<BSOUT, D>(inputF, 0, dims, outputF);
+  std::fill(dims, dims + D, input.size());
+  getBlock<D>(inputF, 0, dims, outputF);
 
   return output;
 }
@@ -82,11 +82,11 @@ constexpr QuantTable<BSOUT, D> scaleFillNear(const QuantTable<BSIN, D> &input) {
  * @param input The matrix to be scaled.
  * @return Scaled matrix.
  */
-template <size_t BSIN, size_t D, size_t BSOUT>
-constexpr QuantTable<BSOUT, D> scaleByDCT(const QuantTable<BSIN, D> &input) {
-  Block<DCTDATAUNIT, BSIN, D>  input_coefs  {};
-  Block<DCTDATAUNIT, BSOUT, D> output_coefs {};
-  QuantTable<BSOUT, D>         output       {};
+template <size_t D>
+constexpr QuantTable<D> scaleByDCT(const QuantTable<D> &input, size_t output_size) {
+  Block<DCTDATAUNIT, D> input_coefs(input.size());
+  Block<DCTDATAUNIT, D> output_coefs(output_size);
+  QuantTable<D>         output(output_size);
 
   auto finputF = [&](size_t index) -> DCTDATAUNIT {
     return input[index];
@@ -96,18 +96,18 @@ constexpr QuantTable<BSOUT, D> scaleByDCT(const QuantTable<BSIN, D> &input) {
     return input_coefs[index];
   };
 
-  fdct<BSIN, D>(finputF, foutputF);
+  fdct<D>(finputF, foutputF);
 
   auto iinputF = [&](size_t index) -> DCTDATAUNIT {
     size_t real_index = 0;
 
     for (size_t j = D; j > 0; j--) {
-      size_t ii = (index % constpow(BSOUT, j)) / constpow(BSOUT, j - 1);
-      if (ii >= BSIN) {
+      size_t ii = (index % constpow(output_size, j)) / constpow(output_size, j - 1);
+      if (ii >= input.size()) {
         return 0;
       }
       else {
-        real_index *= BSIN;
+        real_index *= input.size();
         real_index += ii;
       }
     }

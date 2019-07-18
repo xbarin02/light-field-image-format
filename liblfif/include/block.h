@@ -16,7 +16,7 @@
 /**
 * @brief Struct for block extraction which wraps static parameters for partial specialization.
 */
-template<size_t BS, size_t D>
+template<size_t D>
 struct getBlock {
 
   /**
@@ -27,17 +27,17 @@ struct getBlock {
    * @param output The output callback function with signature void output(size_t index, T value), where T is type of extracted sample.
    */
   template <typename IF, typename OF>
-  getBlock(IF &&input, size_t block, const size_t dims[D], OF &&output) {
+  getBlock(IF &&input, size_t index, const size_t dims[D], OF &&output, size_t block_size) {
     size_t blocks_x = 1;
     size_t size_x   = 1;
 
     for (size_t i = 0; i < D - 1; i++) {
-      blocks_x *= ceil(dims[i]/static_cast<double>(BS));
+      blocks_x *= ceil(dims[i] / static_cast<double>(block_size));
       size_x *= dims[i];
     }
 
-    for (size_t pixel = 0; pixel < BS; pixel++) {
-      size_t image_y = (block / blocks_x) * BS + pixel;
+    for (size_t pixel = 0; pixel < block_size; pixel++) {
+      size_t image_y = (index / blocks_x) * block_size + pixel;
 
       if (image_y >= dims[D-1]) {
         image_y = dims[D-1] - 1;
@@ -48,29 +48,29 @@ struct getBlock {
       };
 
       auto outputF = [&](size_t pixel_index, const auto &value) {
-        output(pixel * constpow(BS, D-1) + pixel_index, value);
+        output(pixel * pow(block_size, D-1) + pixel_index, value);
       };
 
-      getBlock<BS, D-1>(inputF, block % blocks_x, dims, outputF);
+      getBlock<D-1>(inputF, index % blocks_x, dims, outputF, block_size);
     }
   }
 };
 
 /**
  * @brief The parital specialization for getting one dimensional block.
- * @see getBlock<BS, D>
+ * @see getBlock<block_size, D>
  */
-template<size_t BS>
-struct getBlock<BS, 1> {
+template<>
+struct getBlock<1> {
 
   /**
    * @brief The parital specialization for getting one dimensional block.
-   * @see getBlock<BS, D>::getBlock
+   * @see getBlock<block_size, D>::getBlock
    */
   template <typename IF, typename OF>
-  getBlock(IF &&input, const size_t block, const size_t dims[1], OF &&output) {
-    for (size_t pixel = 0; pixel < BS; pixel++) {
-      size_t image = block * BS + pixel;
+  getBlock(IF &&input, const size_t index, const size_t dims[1], OF &&output, size_t block_size) {
+    for (size_t pixel = 0; pixel < block_size; pixel++) {
+      size_t image = index * block_size + pixel;
 
       if (image >= dims[0]) {
         image = dims[0] - 1;
@@ -84,7 +84,7 @@ struct getBlock<BS, 1> {
 /**
 * @brief Struct for block insertion which wraps static parameters for partial specialization.
 */
-template<size_t BS, size_t D>
+template<size_t D>
 struct putBlock {
 
   /**
@@ -95,50 +95,48 @@ struct putBlock {
    * @param output The output callback function with signature void output(size_t index, T value), where T is type of inserted sample.
    */
   template <typename IF, typename OF>
-  putBlock(IF &&input, size_t block, const size_t dims[D], OF &&output) {
+  putBlock(IF &&input, size_t index, const size_t dims[D], OF &&output, size_t block_size) {
     size_t blocks_x = 1;
     size_t size_x   = 1;
 
     for (size_t i = 0; i < D - 1; i++) {
-      blocks_x *= ceil(dims[i]/static_cast<double>(BS));
+      blocks_x *= ceil(dims[i] / static_cast<double>(block_size));
       size_x *= dims[i];
     }
 
-    for (size_t pixel = 0; pixel < BS; pixel++) {
-      size_t image = (block / blocks_x) * BS + pixel;
+    for (size_t pixel = 0; pixel < block_size; pixel++) {
+      size_t image = (index / blocks_x) * block_size + pixel;
 
       if (image >= dims[D-1]) {
         break;
       }
 
       auto inputF = [&](size_t pixel_index) {
-        return input(pixel * constpow(BS, D-1) + pixel_index);
+        return input(pixel * pow(block_size, D-1) + pixel_index);
       };
 
       auto outputF = [&](size_t image_index, const auto &value) {
         return output(image * size_x + image_index, value);
       };
 
-      putBlock<BS, D-1>(inputF, block % blocks_x, dims, outputF);
+      putBlock<D-1>(inputF, index % blocks_x, dims, outputF, block_size);
     }
   }
 };
 
 /**
  * @brief The parital specialization for putting one dimensional block.
- * @see putBlock<BS, D>
  */
-template<size_t BS>
-struct putBlock<BS, 1> {
+template<>
+struct putBlock<1> {
 
   /**
    * @brief The parital specialization for putting one dimensional block.
-   * @see putBlock<BS, D>::getBlock
    */
   template <typename IF, typename OF>
-  putBlock(IF &&input, size_t block, const size_t dims[1], OF &&output) {
-    for (size_t pixel = 0; pixel < BS; pixel++) {
-      size_t image = block * BS + pixel;
+  putBlock(IF &&input, size_t index, const size_t dims[1], OF &&output, size_t block_size) {
+    for (size_t pixel = 0; pixel < block_size; pixel++) {
+      size_t image = index * block_size + pixel;
 
       if (image >= dims[0]) {
         break;
