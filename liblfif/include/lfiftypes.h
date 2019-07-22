@@ -25,6 +25,8 @@ using INPUTTRIPLET = std::array<INPUTUNIT, 3>; /**< @brief Unit which is intende
 
 template<typename T, size_t D>
 class Block {
+  Block() = default;
+
   Block(size_t block_size): m_block_size { block_size }, m_data {} {
     m_data = StackAllocator::malloc((pow(block_size, D) * sizeof(T));
   }
@@ -33,7 +35,7 @@ class Block {
     operator =(block);
   }
 
-  Block(const Block &&block) m_block_size { block.size() }, m_data { block.m_data } {
+  Block(const Block &&block): m_block_size { block.size() }, m_data { block.m_data } {
     block.m_block_size = 0;
     block.m_data = nullptr;
   }
@@ -58,7 +60,14 @@ class Block {
     }
   }
 
-  size_t size() {
+  void init(size_t block_size) {
+    assert(m_block_size == 0);
+
+    m_block_size = block_size;
+    m_data = StackAllocator::malloc((pow(block_size, D) * sizeof(T));
+  }
+
+  size_t size() const {
     return m_block_size;
   }
 

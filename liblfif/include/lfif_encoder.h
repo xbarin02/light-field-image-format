@@ -41,23 +41,21 @@ struct LfifEncoderParams {
   };
 
   uint64_t img_dims[D+1] {}; /**< @brief Dimensions of a decoded image + image count. The multiple of all values should be equal to number of pixels in encoded image.*/
-  uint8_t  color_depth   {};   /**< @brief Number of bits per sample used by each decoded channel.*/
-  bool     use_huffman   {};   /**< @brief Huffman encoding will be used when this is true.*/
+  uint8_t  color_depth   {}; /**< @brief Number of bits per sample used by each decoded channel.*/
+  bool     use_huffman   {}; /**< @brief Huffman encoding will be used when this is true.*/
   uint8_t  block_size    {};
 
-  uint8_t         num_quant_tables  {};
-  QuantTableType *quant_table_types {};
-  double         *qualities         {};
-
-  uint8_t             num_traversal_tables  {};
-  TraversalTableType *traversal_table_types {};
+  std::vector<QuantTableType>     quant_table_types     {};
+  std::vector<double>             qualities             {};
+  std::vector<TraversalTableType> traversal_table_types {};
 
   uint8_t num_entropy_encoder_ctxs {};
 
-  uint8_t  num_channels         {};
-  uint8_t *quant_table_idxs     {};
-  uint8_t *traversal_table_idxs {};
-  uint8_t *entropy_encoder_idxs {};
+  uint8_t num_channels {};
+
+  std::vector<uint8_t> quant_table_idxs     {};
+  std::vector<uint8_t> traversal_table_idxs {};
+  std::vector<uint8_t> entropy_encoder_idxs {};
 }
 
 /**
@@ -70,13 +68,13 @@ public:
 
   const LfifEncoderParams &params;
 
-  DCT<D>             dct;
-  QuantTable<D>      *quant_table;     /**< @brief Quantization matrices for luma and chroma.*/
-  TraversalTable<D>  *traversal_table; /**< @brief Traversal matrices for luma and chroma.*/
+  std::vector<QuantTable<D>>     quant_table;      /**< @brief Quantization matrices for luma and chroma.*/
+  std::vector<TraversalTable<D>> traversal_table;  /**< @brief Traversal matrices for luma and chroma.*/
 
-  ReferenceBlock<D>  *reference_block;    /**< @brief Reference blocks for luma and chroma to be used for traversal optimization.*/
-  HuffmanWeights     *huffman_weight [2]; /**< @brief Weigth maps for luma and chroma and also for the DC and AC coefficients to be used for optimal Huffman encoding.*/
-  HuffmanEncoder     *huffman_encoder[2]; /**< @brief Huffman encoders for luma and chroma and also for the DC and AC coefficients.*/
+  //TODO ty dve hod do tridy kontext, encoder udelej univerzalni
+  std::vector<ReferenceBlock<D>>             reference_block; /**< @brief Reference blocks for luma and chroma to be used for traversal optimization.*/
+  std::vector<std::array<HuffmanWeights, 2>> huffman_weight; /**< @brief Weigth maps for luma and chroma and also for the DC and AC coefficients to be used for optimal Huffman encoding.*/
+  std::vector<std::array<HuffmanEncoder, 2>> huffman_encoder; /**< @brief Huffman encoders for luma and chroma and also for the DC and AC coefficients.*/
 
   size_t blocks_cnt; /**< @brief Number of blocks in the encoded image.*/
   size_t pixels_cnt; /**< @brief Number of pixels in the encoded image.*/
@@ -256,7 +254,7 @@ void LfifEncoder<D>::performScan(IF &&input, F &&func) {
     for (size_t block = 0; block < blocks_cnt; block++) {
       getBlock<D>(inputF, block, img_dims, outputF);
 
-      for (size_t channel = 0; channel < 3; channel++) {
+      for (size_t channel = 0; channel < params.num_channels; channel++) {
 
         for (size_t i = 0; i < pow(m_block_size, D); i++) {
           input_block[i] = current_block[i][channel];
@@ -271,16 +269,17 @@ void LfifEncoder<D>::performScan(IF &&input, F &&func) {
 template <size_t D>
 template<typename F>
 void LfifEncoder<D>::referenceScan(F &&input) {
+  DCT                               dct(m_block_size);
   Block<DCTDATAUNIT, D>       dct_block(m_block_size);
   Block<QDATAUNIT,   D> quantized_block(m_block_size);
 
-  auto perform = [&](Block<INPUTUNIT, D> &input_block, size_t channel) {
-    forwardDiscreteCosineTransform<D>(input_block,      dct_block);
-                          quantize<D>(dct_block,        quantized_block, *quant_tables[channel]);
-               addToReferenceBlock<D>(quantized_block, *reference_blocks[channel]);
+  auto compress_chain = [&](Block<INPUTUNIT, D> &input_block, size_t channel) {
+    forwardDiscreteCosineTransform<D>(input_block,      dct_block,        dct);
+                          quantize<D>(dct_block,        quantized_block,  quant_table[params.quant_table_idxs[channel]]);
+               addToReferenceBlock<D>(quantized_block, reference_block[params.traversal_table_idxs[channel]]);
   };
 
-  performScan(input, perform);
+  performScan(input, compress_chain);
 }
 
 template<size_t D>
@@ -331,22 +330,23 @@ int LfifEncoder<D>::constructTraversalTables(TraversalTableType table_type) {
 template<size_t D>
 template<typename F>
 void LfifEncoder<D>::huffmanScan(F &&input) {
+  DCT                                 dct(m_block_size);
   Block<DCTDATAUNIT,   D>       dct_block(m_block_size);
   Block<QDATAUNIT,     D> quantized_block(m_block_size);
   Block<RunLengthPair, D>       runlength(m_block_size);
 
   QDATAUNIT previous_DC [3] {};
 
-  auto perform = [&](Block<INPUTUNIT, D> &input_block, size_t channel) {
-    forwardDiscreteCosineTransform<D>(input_block,      dct_block);
-                          quantize<D>(dct_block,        quantized_block,         *quant_tables[channel]);
-                      diffEncodeDC<D>(quantized_block,  previous_DC[channel]);
-                          traverse<D>(quantized_block, *traversal_tables[channel]);
-                   runLengthEncode<D>(quantized_block,  runlength,                max_zeroes);
-                 huffmanAddWeights<D>(runlength,        huffman_weights[channel], class_bits);
+  auto compress_chain = [&](Block<INPUTUNIT, D> &input_block, size_t channel) {
+    forwardDiscreteCosineTransform<D>(input_block,     dct_block);
+                          quantize<D>(dct_block,       quantized_block,         quant_table[params.quant_table_idxs[channel]]);
+                      diffEncodeDC<D>(quantized_block, previous_DC[channel]);
+                          traverse<D>(quantized_block, traversal_tables[params.traversal_table_idxs[channel]]);
+                   runLengthEncode<D>(quantized_block, runlength,                max_zeroes);
+                 huffmanAddWeights<D>(runlength,       huffman_weights[params.entropy_encoder_idxs[channel]], class_bits);
   };
 
-  performScan(enc, input, perform);
+  performScan(input, compress_chain);
 }
 
 template<size_t D>
@@ -362,15 +362,15 @@ void LfifEncoder<D>::constructHuffmanTables() {
 template<size_t D>
 void LfifEncoder<D>::writeHeader(std::ostream &output) {
   output << "LFIF-" << D << "D\n";
-  output << block_size << "\n";
 
+  writeValueToStream<uint8_t>(block_size, output);
   writeValueToStream<uint8_t>(color_depth, output);
 
   for (size_t i = 0; i < D + 1; i++) {
     writeValueToStream<uint64_t>(img_dims[i], output);
   }
 
-  for (size_t i = 0; i < 2; i++) {
+  for (size_t i = 0; i < params.num_quant_tables; i++) {
     writeToStream<D>(quant_table[i], output);
   }
 
@@ -394,6 +394,7 @@ void LfifEncoder<D>::writeHeader(std::ostream &output) {
 template<size_t D>
 template<typename F>
 void LfifEncoder<D>::outputScanHuffman(F &&input, std::ostream &output) {
+  DCT                                 dct(m_block_size);
   Block<DCTDATAUNIT,   D>       dct_block(m_block_size);
   Block<QDATAUNIT,     D> quantized_block(m_block_size);
   Block<RunLengthPair, D>       runlength(m_block_size);
@@ -403,7 +404,7 @@ void LfifEncoder<D>::outputScanHuffman(F &&input, std::ostream &output) {
 
   bitstream.open(&output);
 
-  auto perform = [&](Block<INPUTUNIT, D> &input_block, size_t channel) {
+  auto compress_chain = [&](Block<INPUTUNIT, D> &input_block, size_t channel) {
     forwardDiscreteCosineTransform<D>(input_block,      dct_block);
                           quantize<D>(dct_block,        quantized_block,          *quant_tables[channel]);
                       diffEncodeDC<D>(quantized_block,  previous_DC[channel]);
@@ -412,7 +413,7 @@ void LfifEncoder<D>::outputScanHuffman(F &&input, std::ostream &output) {
              encodeToStreamHuffman<D>(runlength,        huffman_encoders[channel], bitstream, class_bits);
   };
 
-  performScan(enc, input, perform);
+  performScan(input, compress_chain);
 
   bitstream.flush();
 }
@@ -437,10 +438,10 @@ void LfifEncoder<D>::outputScanCABAC(F &&input, std::ostream &output) {
                           quantize<D>(dct_block,        quantized_block,          *quant_tables[channel]);
                       diffEncodeDC<D>(quantized_block,  previous_DC[channel]);
                           traverse<D>(quantized_block, *traversal_tables[channel]);
-              encodeTraversedCABAC<D>(quantized_block,  cabac,                         contexts[channel]);
+              encodeTraversedCABAC<D>(quantized_block,  cabac,                      contexts[channel]);
   };
 
-  performScan(enc, input, perform);
+  performScan(input, perform);
 
   cabac.terminate();
 }
